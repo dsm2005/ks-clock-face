@@ -19,7 +19,7 @@ static Layer *s_canvas_layer;
 
 static GPoint s_center;
 static Time s_last_time, s_anim_time;
-static int s_radius = 0, s_anim_hours_60 = 0, s_color_channels[3];
+static int s_radius = 0, /* s_anim_hours_60 = 0, */ s_color_channels[3];
 static bool s_animating = false;
 
 /*************************** AnimationImplementation **************************/
