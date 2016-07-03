@@ -3,8 +3,9 @@
 #define COLORS       PBL_IF_COLOR_ELSE(true, false)
 #define ANTIALIASING true
 
-#define HAND_MARGIN  10
-#define FINAL_RADIUS 55
+#define STROKE_WIDTH 3 /* originally 4 */
+#define HAND_MARGIN  25
+#define FINAL_RADIUS 100
 
 #define ANIMATION_DURATION 500
 #define ANIMATION_DELAY    600
@@ -17,9 +18,13 @@ typedef struct {
 static Window *s_main_window;
 static Layer *s_canvas_layer;
 
+static BitmapLayer *s_background_layers[2];
+static GBitmap *s_background_bitmaps[2];
+static int s_current_background_layer_index;
+
 static GPoint s_center;
 static Time s_last_time, s_anim_time;
-static int s_radius = 0, /* s_anim_hours_60 = 0, */ s_color_channels[3];
+static int s_radius = 0;
 static bool s_animating = false;
 
 /*************************** AnimationImplementation **************************/
@@ -51,13 +56,8 @@ static void animate(int duration, int delay, AnimationImplementation *implementa
 
 static void tick_handler(struct tm *tick_time, TimeUnits changed) {
   // Store time
-  s_last_time.hours = tick_time->tm_hour;
-  s_last_time.hours -= (s_last_time.hours > 12) ? 12 : 0;
+  s_last_time.hours = tick_time->tm_hour % 12;
   s_last_time.minutes = tick_time->tm_min;
-
-  for(int i = 0; i < 3; i++) {
-    s_color_channels[i] = rand() % 256;
-  }
 
   // Redraw
   if(s_canvas_layer) {
@@ -69,27 +69,27 @@ static int hours_to_minutes(int hours_out_of_12) {
   return (int)(float)(((float)hours_out_of_12 / 12.0F) * 60.0F);
 }
 
+static void update_background_proc(Layer *layer, GContext *ctx) {
+  /* s_background_layer
+  uint8_t background_index = s_last_time.minutes % 2;
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "entering update_background_proc");
+  s_background_bitmap = s_background_bitmaps[background_index];
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "set background index to %d", background_index);
+  bitmap_layer_set_bitmap((BitmapLayer) layer, s_background_bitmap);
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "leaving update_background_proc"); */
+}
+
 static void update_proc(Layer *layer, GContext *ctx) {
-  // Color background?
-  GRect bounds = layer_get_bounds(layer);
-  if(COLORS) {
-    graphics_context_set_fill_color(ctx, GColorFromRGB(s_color_channels[0], s_color_channels[1], s_color_channels[2]));
-  } else {
-    graphics_context_set_fill_color(ctx, GColorDarkGray);
-  }
-  graphics_fill_rect(ctx, bounds, 0, GCornerNone);
-
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 4);
-
   graphics_context_set_antialiased(ctx, ANTIALIASING);
-
-  // White clockface
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_circle(ctx, s_center, s_radius);
-
-  // Draw outline
-  graphics_draw_circle(ctx, s_center, s_radius);
+  
+  int new_background_layer_index = s_last_time.minutes % 2; // fixme should be hours, but need to test quicker
+  if (new_background_layer_index != s_current_background_layer_index) {
+    layer_set_hidden(bitmap_layer_get_layer(s_background_layers[1]), !((bool) new_background_layer_index));
+    APP_LOG(APP_LOG_LEVEL_DEBUG, "background_layer_index change from %d to %d", s_current_background_layer_index, new_background_layer_index);
+    bool layer1_hidden = layer_get_hidden(bitmap_layer_get_layer(s_background_layers[1]));
+    APP_LOG(APP_LOG_LEVEL_DEBUG, "layer1_hidden now %s", layer1_hidden ? "true" : "false");
+    s_current_background_layer_index = new_background_layer_index;
+  }
 
   // Don't use current time while animating
   Time mode_time = (s_animating) ? s_anim_time : s_last_time;
@@ -117,9 +117,19 @@ static void update_proc(Layer *layer, GContext *ctx) {
 
   // Draw hands with positive length only
   if(s_radius > 2 * HAND_MARGIN) {
+    graphics_context_set_stroke_color(ctx, GColorOxfordBlue);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH+1);
+    graphics_draw_line(ctx, s_center, hour_hand);
+    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
     graphics_draw_line(ctx, s_center, hour_hand);
   }
   if(s_radius > HAND_MARGIN) {
+    graphics_context_set_stroke_color(ctx, GColorOxfordBlue);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH+1);
+    graphics_draw_line(ctx, s_center, minute_hand);
+    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
     graphics_draw_line(ctx, s_center, minute_hand);
   }
 }
@@ -129,6 +139,17 @@ static void window_load(Window *window) {
   GRect window_bounds = layer_get_bounds(window_layer);
 
   s_center = grect_center_point(&window_bounds);
+  
+  s_background_bitmaps[0] = gbitmap_create_with_resource(RESOURCE_ID_SCRIPT_CAL_LOGO);
+  s_background_layers[0] = bitmap_layer_create(window_bounds);
+  bitmap_layer_set_bitmap(s_background_layers[0], s_background_bitmaps[0]);
+  layer_add_child(window_layer, bitmap_layer_get_layer(s_background_layers[0]));
+  
+  s_background_bitmaps[1] = gbitmap_create_with_resource(RESOURCE_ID_BEAR_LOGO);
+  s_background_layers[1] = bitmap_layer_create(window_bounds);
+  bitmap_layer_set_bitmap(s_background_layers[1], s_background_bitmaps[1]);
+  layer_add_child(window_layer, bitmap_layer_get_layer(s_background_layers[1]));
+  s_current_background_layer_index = 1;
 
   s_canvas_layer = layer_create(window_bounds);
   layer_set_update_proc(s_canvas_layer, update_proc);
@@ -136,6 +157,10 @@ static void window_load(Window *window) {
 }
 
 static void window_unload(Window *window) {
+  gbitmap_destroy(s_background_bitmaps[0]);
+  gbitmap_destroy(s_background_bitmaps[1]);
+  layer_destroy(bitmap_layer_get_layer(s_background_layers[0]));
+  layer_destroy(bitmap_layer_get_layer(s_background_layers[1]));
   layer_destroy(s_canvas_layer);
 }
 
@@ -187,7 +212,7 @@ static void init() {
 }
 
 static void deinit() {
-  window_destroy(s_main_window);
+  window_destroy(s_main_window);  
 }
 
 int main() {

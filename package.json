@@ -16,12 +16,27 @@
         },
         "projectType": "native",
         "resources": {
-            "media": []
+            "media": [
+                {
+                    "file": "images/Cal Bear 1.png",
+                    "name": "BEAR_LOGO",
+                    "targetPlatforms": [
+                        "chalk"
+                    ],
+                    "type": "png"
+                },
+                {
+                    "file": "images/California_Golden_Bears2 pebble round.png",
+                    "name": "SCRIPT_CAL_LOGO",
+                    "targetPlatforms": [
+                        "chalk"
+                    ],
+                    "type": "png"
+                }
+            ]
         },
         "sdkVersion": "3",
         "targetPlatforms": [
-            "aplite",
-            "basalt",
             "chalk"
         ],
         "uuid": "25becbb7-c0bc-4180-82b6-b36f1bf894c7",
