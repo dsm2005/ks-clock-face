@@ -3,8 +3,9 @@
 #define COLORS       PBL_IF_COLOR_ELSE(true, false)
 #define ANTIALIASING true
 
-#define HAND_MARGIN  10
-#define FINAL_RADIUS 55
+#define STROKE_WIDTH 3 /* originally 4 */
+#define HAND_MARGIN  25
+#define FINAL_RADIUS 100
 
 #define ANIMATION_DURATION 500
 #define ANIMATION_DELAY    600
@@ -17,31 +18,35 @@ typedef struct {
 static Window *s_main_window;
 static Layer *s_canvas_layer;
 
+static BitmapLayer *s_background_layers[2];
+static GBitmap *s_background_bitmaps[2];
+static int s_current_background_layer_index;
+
 static GPoint s_center;
 static Time s_last_time, s_anim_time;
-static int s_radius = 0, s_anim_hours_60 = 0, s_color_channels[3];
+static int s_radius = 0;
 static bool s_animating = false;
 
 /*************************** AnimationImplementation **************************/
 
-static void prv_animation_started(Animation *anim, void *context) {
+static void animation_started(Animation *anim, void *context) {
   s_animating = true;
 }
 
-static void prv_animation_stopped(Animation *anim, bool stopped, void *context) {
+static void animation_stopped(Animation *anim, bool stopped, void *context) {
   s_animating = false;
 }
 
-static void prv_animate(int duration, int delay, AnimationImplementation *implementation, bool handlers) {
+static void animate(int duration, int delay, AnimationImplementation *implementation, bool handlers) {
   Animation *anim = animation_create();
   animation_set_duration(anim, duration);
   animation_set_delay(anim, delay);
   animation_set_curve(anim, AnimationCurveEaseInOut);
   animation_set_implementation(anim, implementation);
-  if (handlers) {
+  if(handlers) {
     animation_set_handlers(anim, (AnimationHandlers) {
-      .started = prv_animation_started,
-      .stopped = prv_animation_stopped
+      .started = animation_started,
+      .stopped = animation_stopped
     }, NULL);
   }
   animation_schedule(anim);
@@ -49,50 +54,42 @@ static void prv_animate(int duration, int delay, AnimationImplementation *implem
 
 /************************************ UI **************************************/
 
-static void prv_tick_handler(struct tm *tick_time, TimeUnits changed) {
+static void tick_handler(struct tm *tick_time, TimeUnits changed) {
   // Store time
-  s_last_time.hours = tick_time->tm_hour;
-  s_last_time.hours -= (s_last_time.hours > 12) ? 12 : 0;
+  s_last_time.hours = tick_time->tm_hour % 12;
   s_last_time.minutes = tick_time->tm_min;
 
-  for (int i = 0; i < 3; i++) {
-    s_color_channels[i] = rand() % 256;
-  }
-
   // Redraw
-  if (s_canvas_layer) {
+  if(s_canvas_layer) {
     layer_mark_dirty(s_canvas_layer);
   }
 }
 
-static int prv_hours_to_minutes(int hours_out_of_12) {
-  return hours_out_of_12 * 60 / 12;
+static int hours_to_minutes(int hours_out_of_12) {
+  return (int)(float)(((float)hours_out_of_12 / 12.0F) * 60.0F);
 }
 
-static void prv_update_proc(Layer *layer, GContext *ctx) {
-  GRect full_bounds = layer_get_bounds(layer);
-  GRect bounds = layer_get_unobstructed_bounds(layer);
-  s_center = grect_center_point(&bounds);
+static void update_background_proc(Layer *layer, GContext *ctx) {
+  /* s_background_layer
+  uint8_t background_index = s_last_time.minutes % 2;
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "entering update_background_proc");
+  s_background_bitmap = s_background_bitmaps[background_index];
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "set background index to %d", background_index);
+  bitmap_layer_set_bitmap((BitmapLayer) layer, s_background_bitmap);
+  APP_LOG(APP_LOG_LEVEL_DEBUG, "leaving update_background_proc"); */
+}
 
-  // Color background?
-  if (COLORS) {
-    graphics_context_set_fill_color(ctx, GColorFromRGB(s_color_channels[0], s_color_channels[1], s_color_channels[2]));
-  } else {
-    graphics_context_set_fill_color(ctx, GColorDarkGray);
-  }
-  graphics_fill_rect(ctx, full_bounds, 0, GCornerNone);
-
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 4);
-
+static void update_proc(Layer *layer, GContext *ctx) {
   graphics_context_set_antialiased(ctx, ANTIALIASING);
-
-  // White clockface
-  graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_fill_circle(ctx, s_center, s_radius);
-
-  // Draw outline
-  graphics_draw_circle(ctx, s_center, s_radius);
+  
+  int new_background_layer_index = s_last_time.minutes % 2; // fixme should be hours, but need to test quicker
+  if (new_background_layer_index != s_current_background_layer_index) {
+    layer_set_hidden(bitmap_layer_get_layer(s_background_layers[1]), !((bool) new_background_layer_index));
+    APP_LOG(APP_LOG_LEVEL_DEBUG, "background_layer_index change from %d to %d", s_current_background_layer_index, new_background_layer_index);
+    bool layer1_hidden = layer_get_hidden(bitmap_layer_get_layer(s_background_layers[1]));
+    APP_LOG(APP_LOG_LEVEL_DEBUG, "layer1_hidden now %s", layer1_hidden ? "true" : "false");
+    s_current_background_layer_index = new_background_layer_index;
+  }
 
   // Don't use current time while animating
   Time mode_time = (s_animating) ? s_anim_time : s_last_time;
@@ -100,7 +97,7 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
   // Adjust for minutes through the hour
   float minute_angle = TRIG_MAX_ANGLE * mode_time.minutes / 60;
   float hour_angle;
-  if (s_animating) {
+  if(s_animating) {
     // Hours out of 60 for smoothness
     hour_angle = TRIG_MAX_ANGLE * mode_time.hours / 60;
   } else {
@@ -119,113 +116,107 @@ static void prv_update_proc(Layer *layer, GContext *ctx) {
   };
 
   // Draw hands with positive length only
-  if (s_radius > 2 * HAND_MARGIN) {
+  if(s_radius > 2 * HAND_MARGIN) {
+    graphics_context_set_stroke_color(ctx, GColorOxfordBlue);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH+1);
+    graphics_draw_line(ctx, s_center, hour_hand);
+    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
     graphics_draw_line(ctx, s_center, hour_hand);
   }
-  if (s_radius > HAND_MARGIN) {
+  if(s_radius > HAND_MARGIN) {
+    graphics_context_set_stroke_color(ctx, GColorOxfordBlue);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH+1);
+    graphics_draw_line(ctx, s_center, minute_hand);
+    graphics_context_set_stroke_color(ctx, GColorWhite);
+    graphics_context_set_stroke_width(ctx, STROKE_WIDTH);
     graphics_draw_line(ctx, s_center, minute_hand);
   }
 }
 
-static int prv_anim_percentage(AnimationProgress dist_normalized, int max) {
-  return (int)(dist_normalized * max / ANIMATION_NORMALIZED_MAX);
-}
+static void window_load(Window *window) {
+  Layer *window_layer = window_get_root_layer(window);
+  GRect window_bounds = layer_get_bounds(window_layer);
 
-static void prv_radius_update(Animation *anim, AnimationProgress dist_normalized) {
-  s_radius = prv_anim_percentage(dist_normalized, FINAL_RADIUS);
+  s_center = grect_center_point(&window_bounds);
+  
+  s_background_bitmaps[0] = gbitmap_create_with_resource(RESOURCE_ID_SCRIPT_CAL_LOGO);
+  s_background_layers[0] = bitmap_layer_create(window_bounds);
+  bitmap_layer_set_bitmap(s_background_layers[0], s_background_bitmaps[0]);
+  layer_add_child(window_layer, bitmap_layer_get_layer(s_background_layers[0]));
+  
+  s_background_bitmaps[1] = gbitmap_create_with_resource(RESOURCE_ID_BEAR_LOGO);
+  s_background_layers[1] = bitmap_layer_create(window_bounds);
+  bitmap_layer_set_bitmap(s_background_layers[1], s_background_bitmaps[1]);
+  layer_add_child(window_layer, bitmap_layer_get_layer(s_background_layers[1]));
+  s_current_background_layer_index = 1;
 
-  layer_mark_dirty(s_canvas_layer);
-}
-
-static void prv_hands_update(Animation *anim, AnimationProgress dist_normalized) {
-  s_anim_time.hours = prv_anim_percentage(dist_normalized, prv_hours_to_minutes(s_last_time.hours));
-  s_anim_time.minutes = prv_anim_percentage(dist_normalized, s_last_time.minutes);
-
-  layer_mark_dirty(s_canvas_layer);
-}
-
-static void prv_start_animation() {
-  // Prepare animations
-  static AnimationImplementation s_radius_impl = {
-    .update = prv_radius_update
-  };
-  prv_animate(ANIMATION_DURATION, ANIMATION_DELAY, &s_radius_impl, false);
-
-  static AnimationImplementation s_hands_impl = {
-    .update = prv_hands_update
-  };
-  prv_animate(2 * ANIMATION_DURATION, ANIMATION_DELAY, &s_hands_impl, true);
-}
-
-static void prv_create_canvas() {
-  Layer *window_layer = window_get_root_layer(s_main_window);
-  GRect bounds = layer_get_unobstructed_bounds(window_layer);
-  s_canvas_layer = layer_create(bounds);
-  layer_set_update_proc(s_canvas_layer, prv_update_proc);
+  s_canvas_layer = layer_create(window_bounds);
+  layer_set_update_proc(s_canvas_layer, update_proc);
   layer_add_child(window_layer, s_canvas_layer);
+}
+
+static void window_unload(Window *window) {
+  gbitmap_destroy(s_background_bitmaps[0]);
+  gbitmap_destroy(s_background_bitmaps[1]);
+  layer_destroy(bitmap_layer_get_layer(s_background_layers[0]));
+  layer_destroy(bitmap_layer_get_layer(s_background_layers[1]));
+  layer_destroy(s_canvas_layer);
 }
 
 /*********************************** App **************************************/
 
-// Event fires once, before the obstruction appears or disappears
-static void prv_unobstructed_will_change(GRect final_unobstructed_screen_area, void *context) {
-  if(s_animating) {
-    return;
-  }
-  // Reset the clock animation
-  s_radius = 0;
-  s_anim_hours_60 = 0;
+static int anim_percentage(AnimationProgress dist_normalized, int max) {
+  return (int)(float)(((float)dist_normalized / (float)ANIMATION_NORMALIZED_MAX) * (float)max);
 }
 
-// Event fires once, after obstruction appears or disappears
-static void prv_unobstructed_did_change(void *context) {
-  if(s_animating) {
-    return;
-  }
-  // Play the clock animation
-  prv_start_animation();
+static void radius_update(Animation *anim, AnimationProgress dist_normalized) {
+  s_radius = anim_percentage(dist_normalized, FINAL_RADIUS);
+
+  layer_mark_dirty(s_canvas_layer);
 }
 
-static void prv_window_load(Window *window) {
-  prv_create_canvas();
+static void hands_update(Animation *anim, AnimationProgress dist_normalized) {
+  s_anim_time.hours = anim_percentage(dist_normalized, hours_to_minutes(s_last_time.hours));
+  s_anim_time.minutes = anim_percentage(dist_normalized, s_last_time.minutes);
 
-  prv_start_animation();
-
-  tick_timer_service_subscribe(MINUTE_UNIT, prv_tick_handler);
-
-  // Subscribe to the unobstructed area events
-  UnobstructedAreaHandlers handlers = {
-    .will_change = prv_unobstructed_will_change,
-    .did_change = prv_unobstructed_did_change
-  };
-  unobstructed_area_service_subscribe(handlers, NULL);
+  layer_mark_dirty(s_canvas_layer);
 }
 
-static void prv_window_unload(Window *window) {
-  layer_destroy(s_canvas_layer);
-}
-
-static void prv_init() {
+static void init() {
   srand(time(NULL));
 
   time_t t = time(NULL);
   struct tm *time_now = localtime(&t);
-  prv_tick_handler(time_now, MINUTE_UNIT);
+  tick_handler(time_now, MINUTE_UNIT);
 
   s_main_window = window_create();
   window_set_window_handlers(s_main_window, (WindowHandlers) {
-    .load = prv_window_load,
-    .unload = prv_window_unload,
+    .load = window_load,
+    .unload = window_unload,
   });
   window_stack_push(s_main_window, true);
+
+  tick_timer_service_subscribe(MINUTE_UNIT, tick_handler);
+
+  // Prepare animations
+  AnimationImplementation radius_impl = {
+    .update = radius_update
+  };
+  animate(ANIMATION_DURATION, ANIMATION_DELAY, &radius_impl, false);
+
+  AnimationImplementation hands_impl = {
+    .update = hands_update
+  };
+  animate(2 * ANIMATION_DURATION, ANIMATION_DELAY, &hands_impl, true);
 }
 
-static void prv_deinit() {
-  window_destroy(s_main_window);
+static void deinit() {
+  window_destroy(s_main_window);  
 }
 
 int main() {
-  prv_init();
+  init();
   app_event_loop();
-  prv_deinit();
+  deinit();
 }
